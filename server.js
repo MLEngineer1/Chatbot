@@ -1,20 +1,18 @@
 const express = require("express");
 const { google } = require("googleapis");
 const bodyParser = require("body-parser");
+require("dotenv").config();
 
 const app = express();
 app.use(bodyParser.json());
 
 const calendar = google.calendar({ version: "v3" });
 
-// Load OAuth credentials
-const API_CREDENTIALS = require("./credentials.json");
-
 // Authenticate with Google
 const auth = new google.auth.JWT(
-    API_CREDENTIALS.client_email,
+    process.env.CLIENT_EMAIL,
     null,
-    API_CREDENTIALS.private_key,
+    process.env.PRIVATE_KEY.replace(/\\n/g, "\n"),
     ["https://www.googleapis.com/auth/calendar"]
 );
 
@@ -26,11 +24,11 @@ async function getFreeSlots(startTime, endTime) {
             timeMin: startTime,
             timeMax: endTime,
             timeZone: "UTC",
-            items: [{ id: "your_calendar_id@gmail.com" }],
+            items: [{ id: process.env.CALENDAR_ID }],
         },
     });
 
-    const busySlots = res.data.calendars["your_calendar_id@gmail.com"].busy;
+    const busySlots = res.data.calendars[process.env.CALENDAR_ID].busy;
     let freeSlots = [];
 
     let current = new Date(startTime);
@@ -38,7 +36,7 @@ async function getFreeSlots(startTime, endTime) {
 
     while (current < end) {
         let nextSlot = new Date(current);
-        nextSlot.setMinutes(current.getMinutes() + 30); // Assuming 30-min slots
+        nextSlot.setMinutes(current.getMinutes() + 30);
 
         if (!busySlots.some(slot => 
             new Date(slot.start) < nextSlot && new Date(slot.end) > current
@@ -62,7 +60,7 @@ async function scheduleEvent(startTime, endTime, summary) {
 
     const response = await calendar.events.insert({
         auth,
-        calendarId: "your_calendar_id@gmail.com",
+        calendarId: process.env.CALENDAR_ID,
         requestBody: event,
     });
 
@@ -77,19 +75,20 @@ app.post("/webhook", async (req, res) => {
         const { startTime, endTime } = req.body.queryResult.parameters;
         const freeSlots = await getFreeSlots(startTime, endTime);
         
-        if (freeSlots.length === 0) {
-            res.json({ fulfillmentText: "No available slots in that time range." });
-        } else {
-            res.json({ fulfillmentText: `Available slots: ${freeSlots.join(", ")}` });
-        }
+        res.json({ fulfillmentText: freeSlots.length > 0 
+            ? `Available slots: ${freeSlots.join(", ")}` 
+            : "No available slots." 
+        });
 
     } else if (intent === "BookAppointment") {
         const { startTime, endTime, summary } = req.body.queryResult.parameters;
-        const event = await scheduleEvent(startTime, endTime, summary);
+        await scheduleEvent(startTime, endTime, summary);
         
         res.json({ fulfillmentText: `✅ Appointment confirmed for ${summary} on ${startTime}` });
     }
 });
 
 // Start Express server
-app.listen(3000, () => console.log("Webhook running on port 3000"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Webhook running on port ${PORT}`));
+
