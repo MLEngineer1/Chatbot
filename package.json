@@ -1,14 +1,8 @@
 {
-  "name": "google-calendar-webhook",
-  "version": "1.0.0",
-  "main": "server.js",
-  "dependencies": {
-    "express": "^4.17.3",
-    "googleapis": "^118.0.0",
-    "body-parser": "^1.20.0",
-    "dotenv": "^16.0.3"
-  },
-  "scripts": {
-    "start": "node server.js"
-  }
+  "summary": "Meeting",
+  "description": "Project discussion",
+  "start": "2025-02-15T10:00:00Z",
+  "end": "2025-02-15T11:00:00Z",
+  "email": "user@example.com"
 }
+
