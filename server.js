@@ -2,64 +2,75 @@ const express = require("express");
 const { google } = require("googleapis");
 const bodyParser = require("body-parser");
 const dotenv = require("dotenv");
-const cors = require("cors");
 
 dotenv.config();
 
 const app = express();
-app.use(cors());
 app.use(bodyParser.json());
 
-const SCOPES = ["https://www.googleapis.com/auth/calendar"];
-const calendar = google.calendar({ version: "v3" });
+const PORT = process.env.PORT || 3000;
 
-// Authenticate with Google
+// Load Google Calendar API credentials
 const auth = new google.auth.JWT(
   process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
   null,
-  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"), // Fix for Render
-  SCOPES
+  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  ["https://www.googleapis.com/auth/calendar"]
 );
 
-/**
- * ✅ GET available time slots
- */
+const calendar = google.calendar({ version: "v3", auth });
+
+// ✅ Endpoint to check if server is running
+app.get("/", (req, res) => {
+  res.send("Google Calendar Webhook is running!");
+});
+
+// ✅ Get free time slots
 app.get("/free-slots", async (req, res) => {
   try {
-    const { date } = req.query; // Format: YYYY-MM-DD
-    if (!date) return res.status(400).json({ error: "Date is required" });
+    const { date } = req.query; // e.g., "2025-02-15"
+    if (!date) return res.status(400).send({ error: "Date is required" });
 
-    const start = new Date(date + "T00:00:00Z");
-    const end = new Date(date + "T23:59:59Z");
+    const startOfDay = new Date(`${date}T00:00:00Z`);
+    const endOfDay = new Date(`${date}T23:59:59Z`);
 
-    const { data } = await calendar.events.list({
-      auth,
-      calendarId: process.env.CALENDAR_ID,
-      timeMin: start.toISOString(),
-      timeMax: end.toISOString(),
-      singleEvents: true,
-      orderBy: "startTime",
+    const response = await calendar.freebusy.query({
+      requestBody: {
+        timeMin: startOfDay.toISOString(),
+        timeMax: endOfDay.toISOString(),
+        items: [{ id: process.env.CALENDAR_ID }],
+      },
     });
 
-    const events = data.items.map((event) => ({
-      start: event.start.dateTime || event.start.date,
-      end: event.end.dateTime || event.end.date,
-    }));
+    const busySlots = response.data.calendars[process.env.CALENDAR_ID].busy;
 
-    res.json({ events });
+    // Calculate free slots
+    const freeSlots = [];
+    let lastEnd = startOfDay;
+
+    for (const slot of busySlots) {
+      const busyStart = new Date(slot.start);
+      if (lastEnd < busyStart) freeSlots.push({ start: lastEnd, end: busyStart });
+      lastEnd = new Date(slot.end);
+    }
+
+    if (lastEnd < endOfDay) freeSlots.push({ start: lastEnd, end: endOfDay });
+
+    res.json(freeSlots);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Error fetching free slots:", error);
+    res.status(500).send({ error: "Internal server error" });
   }
 });
 
-/**
- * ✅ POST to schedule an appointment
- */
+// ✅ Schedule an appointment
 app.post("/schedule", async (req, res) => {
   try {
     const { summary, description, start, end, email } = req.body;
-    if (!summary || !start || !end || !email)
-      return res.status(400).json({ error: "Missing required fields" });
+
+    if (!summary || !start || !end || !email) {
+      return res.status(400).send({ error: "Missing required fields" });
+    }
 
     const event = {
       summary,
@@ -69,48 +80,20 @@ app.post("/schedule", async (req, res) => {
       attendees: [{ email }],
     };
 
-    await calendar.events.insert({
-      auth,
+    const response = await calendar.events.insert({
       calendarId: process.env.CALENDAR_ID,
-      resource: event,
+      requestBody: event,
     });
 
-    res.json({ message: "Appointment scheduled successfully!" });
+    res.json({ success: true, eventId: response.data.id });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Error scheduling event:", error);
+    res.status(500).send({ error: "Internal server error" });
   }
 });
 
-/**
- * ✅ Dialogflow Webhook
- */
-app.post("/webhook", async (req, res) => {
-  const intent = req.body.queryResult.intent.displayName;
-
-  if (intent === "CheckAvailability") {
-    const date = req.body.queryResult.parameters.date;
-    const response = await fetch(
-      `https://yourapp.onrender.com/free-slots?date=${date}`
-    );
-    const { events } = await response.json();
-
-    res.json({
-      fulfillmentText: `Available slots: ${events
-        .map((e) => `${e.start} to ${e.end}`)
-        .join(", ")}`,
-    });
-  } else if (intent === "BookAppointment") {
-    const { summary, start, end, email } = req.body.queryResult.parameters;
-    await fetch("https://yourapp.onrender.com/schedule", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ summary, start, end, email }),
-    });
-
-    res.json({ fulfillmentText: "Appointment booked successfully!" });
-  } else {
-    res.json({ fulfillmentText: "Sorry, I didn't understand." });
-  }
+// ✅ Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
-/**
